@@ -17,11 +17,7 @@
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- 字体组合：
-         UI: Inter
-         Canvas 英文 Serif: Playfair Display (更粗重)
-         Canvas 中文 Serif: Noto Serif SC (加粗) 
-    -->
+    <!-- 字体组合 -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Playfair+Display:wght@700;900&family=Noto+Serif+SC:wght@700;900&display=swap" rel="stylesheet">
 
     <!-- Phosphor Icons -->
@@ -54,7 +50,6 @@
     <style>
         body { background-color: #F5F5F7; color: #1D1D1F; }
         
-        /* 范围滑块美化 */
         input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
         input[type=range]::-webkit-slider-thumb {
             -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%;
@@ -65,11 +60,9 @@
             width: 100%; height: 4px; cursor: pointer; background: #E5E5EA; border-radius: 2px;
         }
         
-        /* 颜色选择器美化 */
         input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
         input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; border: 1px solid #e5e5e5; }
         
-        /* 隐藏滚动条但保留功能 */
         .custom-scroll::-webkit-scrollbar { width: 6px; }
         .custom-scroll::-webkit-scrollbar-thumb { background-color: #D1D1D6; border-radius: 20px; }
         
@@ -78,6 +71,10 @@
             width: 16px; height: 16px; animation: spin 0.8s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* 弹窗动画 */
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
     </style>
 </head>
 <body class="h-screen overflow-hidden flex text-sm">
@@ -176,11 +173,613 @@
                             </button>
                         </div>
                          
-                         <!-- 颜色选择 (文字与背景) -->
+                         <!-- 颜色选择 -->
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <label class="text-xs font-medium text-secondary block mb-2">背景色 Background</label>
                                 <div class="flex items-center gap-2 bg-surface p-1.5 rounded-lg border border-transparent hover:border-gray-200 transition">
+                                    <input type="color" v-model="config.bgColor" class="w-8 h-8 rounded cursor-pointer block">
+                                    <span class="text-[10px] text-secondary font-mono">{{ config.bgColor }}</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="text-xs font-medium text-secondary block mb-2">强调色 Accent</label>
+                                <div class="flex items-center gap-2 bg-surface p-1.5 rounded-lg border border-transparent hover:border-gray-200 transition">
+                                    <input type="color" v-model="config.themeColor" class="w-8 h-8 rounded cursor-pointer block">
+                                    <div class="flex -space-x-1 overflow-hidden">
+                                        <div v-for="c in palette" :key="c" @click="config.themeColor = c" 
+                                             class="w-3 h-3 rounded-full cursor-pointer border border-white"
+                                             :style="{backgroundColor: c}"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 间距控制 -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-xs font-medium text-secondary">间距 Gap</label>
+                                <span class="text-xs font-mono font-bold">{{ config.gap }}px</span>
+                            </div>
+                            <input type="range" v-model.number="config.gap" min="0" max="60" step="4">
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div class="p-6 border-t border-border bg-panel shrink-0 z-30">
+                <button @click="generateAndPreview" :disabled="isGenerating" 
+                    class="w-full h-12 bg-primary text-white rounded-lg font-bold text-sm tracking-wide shadow-lg hover:bg-black transition-colors flex items-center justify-center gap-2">
+                    <span v-if="isGenerating" class="loader"></span>
+                    <span v-else>生成预览并保存</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- 右侧预览区域 -->
+        <main class="flex-1 bg-[#E5E5E5] relative overflow-hidden flex flex-col items-center justify-center">
+            
+            <!-- 缩放控制悬浮条 -->
+            <div class="absolute top-6 right-6 z-10 flex items-center gap-3 bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-200">
+                 <button @click="adjustZoom(-0.05)" class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded-full"><i class="ph-bold ph-minus text-xs"></i></button>
+                 <span class="text-xs font-mono font-bold text-gray-600 w-12 text-center">{{ Math.round(previewScale * 100) }}%</span>
+                 <button @click="adjustZoom(0.05)" class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded-full"><i class="ph-bold ph-plus text-xs"></i></button>
+            </div>
+            
+            <div class="absolute top-6 left-6 z-10 text-xs text-gray-500 font-medium hidden md:block">
+                * 预览画面已缩放，实际导出为 1200px 宽度的高清图
+            </div>
+
+            <!-- 画布容器 (居中) -->
+            <div id="preview-wrapper" class="w-full h-full flex items-center justify-center p-8 overflow-hidden">
+                
+                <!-- 
+                    核心画布 
+                    固定宽度 1200px (足够大，保证清晰度)
+                    使用 transform scale 进行屏幕适配
+                -->
+                <div id="collage-canvas" 
+                     :style="{ transform: `scale(${previewScale})`, backgroundColor: config.bgColor }"
+                     class="shadow-floating shrink-0 origin-center text-center flex flex-col box-border transition-colors duration-300">
+                    
+                    <!-- 画布内容区: 内边距 80px -->
+                    <div class="w-[1200px] min-h-[1600px] p-[80px] flex flex-col h-full transition-colors duration-300"
+                         :style="{ backgroundColor: config.bgColor }">
+                        
+                        <!-- 1. 头部标题区 (加大字号) -->
+                        <div class="mb-16">
+                            <h1 class="font-serif text-[100px] leading-[1.1] font-black text-primary mb-6 tracking-tighter" 
+                                :style="{ color: config.themeColor }">
+                                {{ config.title || '标题 TITLE' }}
+                            </h1>
+                            <div class="flex items-center justify-center gap-6">
+                                <div class="h-[2px] w-12 bg-gray-800"></div>
+                                <p class="font-serif text-4xl font-bold text-gray-600 tracking-widest uppercase">
+                                    {{ config.subtitle || 'SUBTITLE HERE' }}
+                                </p>
+                                <div class="h-[2px] w-12 bg-gray-800"></div>
+                            </div>
+                        </div>
+
+                        <!-- 2. 图片布局区 -->
+                        <div class="flex-1 w-full" :class="layoutClasses" :style="layoutStyles">
+                            
+                            <!-- 单个图片卡片 -->
+                            <div v-for="(img, idx) in images" :key="idx" 
+                                 class="relative bg-gray-200 overflow-hidden shadow-sm group"
+                                 :style="{ aspectRatio: '3/4' }">
+                                
+                                <!-- 图片 (带滤镜) -->
+                                <img :src="img.url" 
+                                     class="w-full h-full object-cover block"
+                                     :style="{ filter: `grayscale(${config.grayscale}%) contrast(${config.contrast}%)` }">
+                                
+                                <!-- 巨大的标签 (Overlay) -->
+                      <!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高清拼图生成器</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    
+    <!-- html2canvas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- 字体组合 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Playfair+Display:wght@700;900&family=Noto+Serif+SC:wght@700;900&display=swap" rel="stylesheet">
+
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        serif: ['"Playfair Display"', '"Noto Serif SC"', 'serif'],
+                    },
+                    colors: {
+                        surface: '#F5F5F7',
+                        panel: '#FFFFFF',
+                        primary: '#1D1D1F',
+                        secondary: '#86868B',
+                        border: '#E5E5E5',
+                        'canvas-bg': '#FAF9F6',
+                    },
+                    boxShadow: {
+                        'floating': '0 25px 50px -12px rgba(0, 0, 0, 0.15)',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body { background-color: #F5F5F7; color: #1D1D1F; }
+        
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%;
+            background: #FFFFFF; border: 1px solid #D1D1D6; box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+            cursor: pointer; margin-top: -7px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: #E5E5EA; border-radius: 2px;
+        }
+        
+        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; border: 1px solid #e5e5e5; }
+        
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background-color: #D1D1D6; border-radius: 20px; }
+        
+        .loader {
+            border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; border-top: 2px solid #fff;
+            width: 16px; height: 16px; animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* 弹窗动画 */
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+    </style>
+</head>
+<body class="h-screen overflow-hidden flex text-sm">
+
+    <div id="app" class="w-full h-full flex flex-col md:flex-row">
+
+        <!-- 左侧控制面板 -->
+        <aside class="w-full md:w-[380px] bg-panel border-r border-border flex flex-col h-[45vh] md:h-full z-20 shadow-xl shrink-0">
+            
+            <header class="h-16 flex items-center px-6 border-b border-border bg-panel shrink-0">
+                <div class="w-6 h-6 bg-primary text-white rounded mr-2 flex items-center justify-center">
+                    <i class="ph-bold ph-text-aa text-sm"></i>
+                </div>
+                <h1 class="font-bold text-lg tracking-tight">排版工作室</h1>
+            </header>
+
+            <div class="flex-1 overflow-y-auto custom-scroll px-6 py-6 space-y-8">
+                
+                <!-- 1. 文本设置 -->
+                <section>
+                    <h3 class="text-xs font-bold text-primary uppercase tracking-wider mb-4 border-l-2 border-primary pl-2">文案 Typography</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-medium text-secondary mb-1">主标题 (大号)</label>
+                            <input type="text" v-model="config.title" class="w-full px-3 py-2 bg-surface border-none rounded-md focus:ring-1 focus:ring-primary outline-none transition" placeholder="输入主标题...">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-secondary mb-1">副标题 (中号)</label>
+                            <input type="text" v-model="config.subtitle" class="w-full px-3 py-2 bg-surface border-none rounded-md focus:ring-1 focus:ring-primary outline-none transition" placeholder="输入副标题...">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. 图片管理 -->
+                <section>
+                    <div class="flex justify-between items-end mb-4 border-l-2 border-primary pl-2">
+                        <h3 class="text-xs font-bold text-primary uppercase tracking-wider">素材 Media</h3>
+                        <span class="text-xs text-secondary">{{ images.length }} 张</span>
+                    </div>
+
+                    <div class="relative group cursor-pointer mb-4">
+                        <input type="file" multiple @change="handleImageUpload" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 z-10 cursor-pointer">
+                        <div class="border-2 border-dashed border-gray-200 rounded-lg h-20 flex flex-col items-center justify-center bg-surface group-hover:bg-gray-100 group-hover:border-primary transition-colors">
+                            <span class="text-xs font-medium text-secondary group-hover:text-primary"><i class="ph-bold ph-plus mr-1"></i> 添加图片</span>
+                        </div>
+                    </div>
+
+                    <div v-if="images.length > 0" class="grid grid-cols-4 gap-2">
+                        <div v-for="(img, idx) in images" :key="idx" class="relative group aspect-[3/4] bg-gray-100 rounded overflow-hidden cursor-move">
+                            <img :src="img.url" 
+                                 class="w-full h-full object-cover transition-all duration-300"
+                                 :style="{ filter: `grayscale(${config.grayscale}%) contrast(${config.contrast}%)` }">
+                            <button @click.stop="removeImage(idx)" class="absolute top-0.5 right-0.5 w-5 h-5 bg-black/50 hover:bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all z-20">
+                                <i class="ph-bold ph-x text-[10px]"></i>
+                            </button>
+                            <div class="absolute bottom-0 left-0 bg-primary text-white text-[10px] font-bold px-1.5 py-0.5 z-10">
+                                {{ getLabel(idx) }}
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 3. 滤镜与风格 -->
+                <section>
+                    <h3 class="text-xs font-bold text-primary uppercase tracking-wider mb-4 border-l-2 border-primary pl-2">视觉 Visual</h3>
+                    
+                    <div class="space-y-6">
+                        <!-- 黑白控制 -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-xs font-medium text-secondary">黑白 Grayscale</label>
+                                <span class="text-xs font-mono font-bold">{{ config.grayscale }}%</span>
+                            </div>
+                            <input type="range" v-model.number="config.grayscale" min="0" max="100">
+                        </div>
+
+                        <!-- 对比度控制 -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-xs font-medium text-secondary">对比 Contrast</label>
+                                <span class="text-xs font-mono font-bold">{{ config.contrast }}%</span>
+                            </div>
+                            <input type="range" v-model.number="config.contrast" min="50" max="150" step="5">
+                        </div>
+
+                        <!-- 布局选择 -->
+                        <div class="grid grid-cols-3 gap-2">
+                            <button v-for="l in ['horizontal', 'vertical', 'grid']" :key="l"
+                                @click="config.layout = l"
+                                class="flex flex-col items-center justify-center py-3 border rounded-lg transition-all"
+                                :class="config.layout === l ? 'border-primary bg-primary text-white' : 'border-gray-200 text-secondary hover:border-gray-400'">
+                                <i v-if="l === 'horizontal'" class="ph-bold ph-columns text-lg"></i>
+                                <i v-if="l === 'vertical'" class="ph-bold ph-rows text-lg"></i>
+                                <i v-if="l === 'grid'" class="ph-bold ph-squares-four text-lg"></i>
+                                <span class="text-[10px] mt-1 capitalize">{{ l === 'grid' ? '宫格' : (l === 'vertical' ? '竖排' : '横排') }}</span>
+                            </button>
+                        </div>
+                         
+                         <!-- 颜色选择 -->
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="text-xs font-medium text-secondary block mb-2">背景色 Background</label>
+                                <div class="flex items-center gap-2 bg-surface p-1.5 rounded-lg border border-transparent hover:border-gray-200 transition">
+                                    <input type="color" v-model="config.bgColor" class="w-8 h-8 rounded cursor-pointer block">
+                                    <span class="text-[10px] text-secondary font-mono">{{ config.bgColor }}</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="text-xs font-medium text-secondary block mb-2">强调色 Accent</label>
+                                <div class="flex items-center gap-2 bg-surface p-1.5 rounded-lg border border-transparent hover:border-gray-200 transition">
+                                    <input type="color" v-model="config.themeColor" class="w-8 h-8 rounded cursor-pointer block">
+                                    <div class="flex -space-x-1 overflow-hidden">
+                                        <div v-for="c in palette" :key="c" @click="config.themeColor = c" 
+                                             class="w-3 h-3 rounded-full cursor-pointer border border-white"
+                                             :style="{backgroundColor: c}"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 间距控制 -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-xs font-medium text-secondary">间距 Gap</label>
+                                <span class="text-xs font-mono font-bold">{{ config.gap }}px</span>
+                            </div>
+                            <input type="range" v-model.number="config.gap" min="0" max="60" step="4">
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div class="p-6 border-t border-border bg-panel shrink-0 z-30">
+                <button @click="generateAndPreview" :disabled="isGenerating" 
+                    class="w-full h-12 bg-primary text-white rounded-lg font-bold text-sm tracking-wide shadow-lg hover:bg-black transition-colors flex items-center justify-center gap-2">
+                    <span v-if="isGenerating" class="loader"></span>
+                    <span v-else>生成预览并保存</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- 右侧预览区域 -->
+        <main class="flex-1 bg-[#E5E5E5] relative overflow-hidden flex flex-col items-center justify-center">
+            
+            <!-- 缩放控制悬浮条 -->
+            <div class="absolute top-6 right-6 z-10 flex items-center gap-3 bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-200">
+                 <button @click="adjustZoom(-0.05)" class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded-full"><i class="ph-bold ph-minus text-xs"></i></button>
+                 <span class="text-xs font-mono font-bold text-gray-600 w-12 text-center">{{ Math.round(previewScale * 100) }}%</span>
+                 <button @click="adjustZoom(0.05)" class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded-full"><i class="ph-bold ph-plus text-xs"></i></button>
+            </div>
+            
+            <div class="absolute top-6 left-6 z-10 text-xs text-gray-500 font-medium hidden md:block">
+                * 预览画面已缩放，实际导出为 1200px 宽度的高清图
+            </div>
+
+            <!-- 画布容器 (居中) -->
+            <div id="preview-wrapper" class="w-full h-full flex items-center justify-center p-8 overflow-hidden">
+                
+                <!-- 
+                    核心画布 
+                    固定宽度 1200px (足够大，保证清晰度)
+                    使用 transform scale 进行屏幕适配
+                -->
+                <div id="collage-canvas" 
+                     :style="{ transform: `scale(${previewScale})`, backgroundColor: config.bgColor }"
+                     class="shadow-floating shrink-0 origin-center text-center flex flex-col box-border transition-colors duration-300">
+                    
+                    <!-- 画布内容区: 内边距 80px -->
+                    <div class="w-[1200px] min-h-[1600px] p-[80px] flex flex-col h-full transition-colors duration-300"
+                         :style="{ backgroundColor: config.bgColor }">
+                        
+                        <!-- 1. 头部标题区 (加大字号) -->
+                        <div class="mb-16">
+                            <h1 class="font-serif text-[100px] leading-[1.1] font-black text-primary mb-6 tracking-tighter" 
+                                :style="{ color: config.themeColor }">
+                                {{ config.title || '标题 TITLE' }}
+                            </h1>
+                            <div class="flex items-center justify-center gap-6">
+                                <div class="h-[2px] w-12 bg-gray-800"></div>
+                                <p class="font-serif text-4xl font-bold text-gray-600 tracking-widest uppercase">
+                                    {{ config.subtitle || 'SUBTITLE HERE' }}
+                                </p>
+                                <div class="h-[2px] w-12 bg-gray-800"></div>
+                            </div>
+                        </div>
+
+                        <!-- 2. 图片布局区 -->
+                        <div class="flex-1 w-full" :class="layoutClasses" :style="layoutStyles">
+                            
+                            <!-- 单个图片卡片 -->
+                            <div v-for="(img, idx) in images" :key="idx" 
+                                 class="relative bg-gray-200 overflow-hidden shadow-sm group"
+                                 :style="{ aspectRatio: '3/4' }">
+                                
+                                <!-- 图片 (带滤镜) -->
+                                <img :src="img.url" 
+                                     class="w-full h-full object-cover block"
+                                     :style="{ filter: `grayscale(${config.grayscale}%) contrast(${config.contrast}%)` }">
+                                
+                                <!-- 巨大的标签 (Overlay) -->
+                                <!-- 位于底部中央，巨大的白色圆块，极高的对比度 -->
+                                <div class="absolute bottom-8 left-1/2 -translate-x-1/2">
+                                    <div class="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-lg border-2 border-white">
+                                        <span class="font-serif text-6xl font-black leading-none pt-1" :style="{ color: config.themeColor }">
+                                            {{ getLabel(idx) }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 空状态占位 -->
+                            <div v-if="images.length === 0" class="col-span-full w-full h-[600px] border-4 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center text-gray-400 gap-6">
+                                <i class="ph-duotone ph-image text-8xl opacity-50"></i>
+                                <span class="text-3xl font-bold tracking-widest">请上传图片</span>
+                            </div>
+
+                        </div>
+
+                        <!-- 3. 底部信息 (加大字号) -->
+                        <div class="mt-20 pt-8 border-t-2 border-gray-200 flex justify-between items-end">
+                            <div class="text-left">
+                                <!-- Removed decorative text -->
+                            </div>
+                            <div class="text-right">
+                                <p class="font-serif text-4xl font-bold text-primary">@观火斋</p>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+        </main>
+
+        <!-- 新增：图片预览弹窗 -->
+        <transition name="fade">
+            <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" @click.self="showModal = false">
+                <div class="bg-white rounded-lg shadow-2xl overflow-hidden max-w-4xl w-full max-h-[90vh] flex flex-col relative">
+                    
+                    <div class="flex justify-between items-center px-4 py-3 border-b border-gray-100 bg-white">
+                        <h3 class="font-bold text-lg text-primary">图片已生成</h3>
+                        <button @click="showModal = false" class="text-gray-500 hover:text-black p-1 bg-gray-100 rounded-full">
+                            <i class="ph-bold ph-x text-lg"></i>
+                        </button>
+                    </div>
+
+                    <div class="flex-1 overflow-auto p-4 bg-gray-100 flex justify-center items-start">
+                         <img :src="generatedImage" class="max-w-full h-auto shadow-lg border border-gray-200 object-contain">
+                    </div>
+
+                    <div class="p-4 bg-white border-t border-gray-100 flex flex-col md:flex-row gap-3 justify-between items-center">
+                        <p class="text-sm text-gray-500 text-center md:text-left">
+                            <i class="ph-fill ph-info text-blue-500 mr-1"></i>
+                            移动端长按图片可保存，电脑端右键另存为
+                        </p>
+                        <a :href="generatedImage" download="Collage_Export.png" class="px-6 py-2 bg-primary hover:bg-black text-white rounded-lg font-bold text-sm transition-colors shadow-lg">
+                            下载图片 (Download)
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, onUnmounted, nextTick } = Vue;
+
+        createApp({
+            setup() {
+                // 状态
+                const isGenerating = ref(false);
+                const previewScale = ref(0.4);
+                const palette = ['#1D1D1F', '#CD3F3E', '#2A5C8C', '#4F6F52', '#8B5F28'];
+
+                const config = ref({
+                    title: '字体排版测试',
+                    subtitle: '黑白 / 对比',
+                    themeColor: '#1D1D1F',
+                    bgColor: '#FFFFFF',
+                    layout: 'horizontal',
+                    gap: 40,
+                    grayscale: 100,
+                    contrast: 110,
+                });
+
+                const images = ref([]);
+                const generatedImage = ref(null);
+                const showModal = ref(false);
+
+                // 日期
+                const now = new Date();
+                const dateDisplay = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,'0')}.${String(now.getDate()).padStart(2,'0')}`;
+
+                // 方法
+                const handleImageUpload = (event) => {
+                    const files = Array.from(event.target.files);
+                    if (!files.length) return;
+                    files.forEach(file => {
+                        images.value.push({ file, url: URL.createObjectURL(file) });
+                    });
+                    event.target.value = '';
+                };
+
+                const removeImage = (index) => {
+                    URL.revokeObjectURL(images.value[index].url);
+                    images.value.splice(index, 1);
+                };
+
+                const getLabel = (index) => String.fromCharCode(65 + index);
+
+                const layoutClasses = computed(() => {
+                    const l = config.value.layout;
+                    if (l === 'horizontal') return 'flex flex-row items-stretch';
+                    if (l === 'vertical') return 'flex flex-col';
+                    if (l === 'grid') return 'grid';
+                    return '';
+                });
+
+                const layoutStyles = computed(() => {
+                    const count = images.value.length || 1;
+                    const gap = `${config.value.gap}px`;
+                    
+                    if (config.value.layout === 'grid') {
+                        let cols = 2;
+                        if (count === 1) cols = 1;
+                        if (count >= 3 && count <= 6 && count !== 4) cols = 3; 
+                        if (count > 6) cols = 3;
+                        return { gap, gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` };
+                    }
+                    return { gap };
+                });
+
+                const adjustZoom = (delta) => {
+                    const newScale = previewScale.value + delta;
+                    if (newScale > 0.1 && newScale < 1.5) {
+                        previewScale.value = Number(newScale.toFixed(2));
+                    }
+                };
+
+                const autoFit = () => {
+                    const wrapper = document.getElementById('preview-wrapper');
+                    if (!wrapper) return;
+                    
+                    const padding = 60;
+                    const availableH = wrapper.clientHeight - padding;
+                    const availableW = wrapper.clientWidth - padding;
+                    
+                    const canvasW = 1200;
+                    const canvasH = 1600; 
+                    
+                    const scaleW = availableW / canvasW;
+                    const scaleH = availableH / canvasH;
+                    
+                    previewScale.value = Math.min(Math.min(scaleW, scaleH), 0.6);
+                };
+
+                // 核心修复逻辑：克隆节点以避免变形和滤镜丢失
+                const generateAndPreview = async () => {
+                    isGenerating.value = true;
+                    await nextTick();
+                    
+                    // 获取原始节点
+                    const original = document.getElementById('collage-canvas');
+                    
+                    // 1. 克隆节点
+                    const clone = original.cloneNode(true);
+                    
+                    // 2. 设置克隆节点样式 (消除 CSS transform 带来的变形)
+                    // 将其设置为固定定位，移出可视区域，但保持其渲染尺寸 (1200px)
+                    clone.style.transform = 'none'; 
+                    clone.style.position = 'fixed';
+                    clone.style.top = '0';
+                    clone.style.left = '0';
+                    clone.style.zIndex = '-9999';
+                    clone.style.margin = '0';
+                    // 确保背景色正确应用到克隆节点
+                    clone.style.backgroundColor = config.value.bgColor;
+
+                    // 插入到 body
+                    document.body.appendChild(clone);
+                    
+                    try {
+                        // 3. 使用 html2canvas 渲染克隆节点
+                        const canvas = await html2canvas(clone, {
+                            scale: 2, // 2倍图，输出宽度为 2400px，非常清晰
+                            useCORS: true,
+                            allowTaint: true,
+                            backgroundColor: config.value.bgColor,
+                            logging: false
+                        });
+
+                        // 4. 显示弹窗
+                        generatedImage.value = canvas.toDataURL('image/png', 1.0);
+                        showModal.value = true;
+
+                    } catch (e) {
+                        console.error(e);
+                        alert('生成失败，请重试');
+                    } finally {
+                        // 5. 清理克隆节点
+                        document.body.removeChild(clone);
+                        isGenerating.value = false;
+                    }
+                };
+
+                onMounted(() => {
+                    window.addEventListener('resize', autoFit);
+                    setTimeout(autoFit, 100);
+                });
+                
+                onUnmounted(() => window.removeEventListener('resize', autoFit));
+
+                return {
+                    config, images, isGenerating, previewScale, palette,
+                    generatedImage, showModal,
+                    handleImageUpload, removeImage, getLabel,
+                    layoutClasses, layoutStyles,
+                    generateAndPreview, adjustZoom
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
+
+
+ex items-center gap-2 bg-surface p-1.5 rounded-lg border border-transparent hover:border-gray-200 transition">
                                     <input type="color" v-model="config.bgColor" class="w-8 h-8 rounded cursor-pointer block">
                                     <span class="text-[10px] text-secondary font-mono">{{ config.bgColor }}</span>
                                 </div>
