@@ -11,8 +11,8 @@
     <!-- Vue 3 -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     
-    <!-- html2canvas -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- html-to-image (更强大的渲染库) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
 
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -178,6 +178,336 @@
                             <div>
                                 <label class="text-xs font-medium text-secondary block mb-2">背景色 Background</label>
                                 <div class="flex items-center gap-2 bg-surface p-1.5 rounded-lg border border-transparent hover:border-gray-200 transition">
+                                    <input type="color" v-model="config.bgColor" class="w-8 h-8 rounded cursor-pointer block">
+                                    <span class="text-[10px] text-secondary font-mono">{{ config.bgColor }}</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="text-xs font-medium text-secondary block mb-2">强调色 Accent</label>
+                                <div class="flex items-center gap-2 bg-surface p-1.5 rounded-lg border border-transparent hover:border-gray-200 transition">
+                                    <input type="color" v-model="config.themeColor" class="w-8 h-8 rounded cursor-pointer block">
+                                    <div class="flex -space-x-1 overflow-hidden">
+                                        <div v-for="c in palette" :key="c" @click="config.themeColor = c" 
+                                             class="w-3 h-3 rounded-full cursor-pointer border border-white"
+                                             :style="{backgroundColor: c}"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 间距控制 -->
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-xs font-medium text-secondary">间距 Gap</label>
+                                <span class="text-xs font-mono font-bold">{{ config.gap }}px</span>
+                            </div>
+                            <input type="range" v-model.number="config.gap" min="0" max="60" step="4">
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div class="p-6 border-t border-border bg-panel shrink-0 z-30">
+                <button @click="generateAndPreview" :disabled="isGenerating" 
+                    class="w-full h-12 bg-primary text-white rounded-lg font-bold text-sm tracking-wide shadow-lg hover:bg-black transition-colors flex items-center justify-center gap-2">
+                    <span v-if="isGenerating" class="loader"></span>
+                    <span v-else>生成预览并保存</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- 右侧预览区域 -->
+        <main class="flex-1 bg-[#E5E5E5] relative overflow-hidden flex flex-col items-center justify-center">
+            
+            <!-- 缩放控制悬浮条 -->
+            <div class="absolute top-6 right-6 z-10 flex items-center gap-3 bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-200" v-show="!isGenerating">
+                 <button @click="adjustZoom(-0.05)" class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded-full"><i class="ph-bold ph-minus text-xs"></i></button>
+                 <span class="text-xs font-mono font-bold text-gray-600 w-12 text-center">{{ Math.round(previewScale * 100) }}%</span>
+                 <button @click="adjustZoom(0.05)" class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded-full"><i class="ph-bold ph-plus text-xs"></i></button>
+            </div>
+            
+            <!-- 画布容器 (居中) -->
+            <!-- 关键点：isGenerating 为 true 时，暂时溢出 hidden 限制，确保截图完整 -->
+            <div id="preview-wrapper" class="w-full h-full flex items-center justify-center p-8"
+                 :class="{'overflow-hidden': !isGenerating, 'overflow-visible': isGenerating}">
+                
+                <!-- 
+                    核心画布 
+                    isGenerating 时，移除缩放 transform，恢复原始尺寸
+                -->
+                <div id="collage-canvas" 
+                     :style="canvasStyle"
+                     class="shadow-floating shrink-0 origin-center text-center flex flex-col box-border transition-colors duration-300">
+                    
+                    <!-- 画布内容区: 内边距 80px -->
+                    <div class="w-[1200px] min-h-[1600px] p-[80px] flex flex-col h-full transition-colors duration-300"
+                         :style="{ backgroundColor: config.bgColor }">
+                        
+                        <!-- 1. 头部标题区 (加大字号) -->
+                        <div class="mb-16">
+                            <h1 class="font-serif text-[100px] leading-[1.1] font-black text-primary mb-6 tracking-tighter" 
+                                :style="{ color: config.themeColor }">
+                                {{ config.title || '标题 TITLE' }}
+                            </h1>
+                            <div class="flex items-center justify-center gap-6">
+                                <div class="h-[2px] w-12 bg-gray-800"></div>
+                                <p class="font-serif text-4xl font-bold text-gray-600 tracking-widest uppercase">
+                                    {{ config.subtitle || 'SUBTITLE HERE' }}
+                                </p>
+                                <div class="h-[2px] w-12 bg-gray-800"></div>
+                            </div>
+                        </div>
+
+                        <!-- 2. 图片布局区 -->
+                        <div class="flex-1 w-full" :class="layoutClasses" :style="layoutStyles">
+                            
+                            <!-- 单个图片卡片 -->
+                            <div v-for="(img, idx) in images" :key="idx" 
+                                 class="relative bg-gray-200 overflow-hidden shadow-sm group"
+                                 :style="{ aspectRatio: '3/4' }">
+                                
+                                <!-- 图片 (带滤镜) -->
+                                <img :src="img.url" 
+                                     class="w-full h-full object-cover block"
+                                     :style="{ filter: `grayscale(${config.grayscale}%) contrast(${config.contrast}%)` }">
+                                
+                                <!-- 巨大的标签 (Overlay) -->
+                                <!-- 位于底部中央，巨大的白色圆块，极高的对比度 -->
+                                <div class="absolute bottom-8 left-1/2 -translate-x-1/2">
+                                    <div class="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-lg border-2 border-white">
+                                        <span class="font-serif text-6xl font-black leading-none pt-1" :style="{ color: config.themeColor }">
+                                            {{ getLabel(idx) }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 空状态占位 -->
+                            <div v-if="images.length === 0" class="col-span-full w-full h-[600px] border-4 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center text-gray-400 gap-6">
+                                <i class="ph-duotone ph-image text-8xl opacity-50"></i>
+                                <span class="text-3xl font-bold tracking-widest">请上传图片</span>
+                            </div>
+
+                        </div>
+
+                        <!-- 3. 底部信息 (加大字号) -->
+                        <div class="mt-20 pt-8 border-t-2 border-gray-200 flex justify-between items-end">
+                            <div class="text-left">
+                                <!-- Removed decorative text -->
+                            </div>
+                            <div class="text-right">
+                                <p class="font-serif text-4xl font-bold text-primary">@观火斋</p>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+        </main>
+
+        <!-- 新增：图片预览弹窗 -->
+        <transition name="fade">
+            <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" @click.self="showModal = false">
+                <div class="bg-white rounded-lg shadow-2xl overflow-hidden max-w-4xl w-full max-h-[90vh] flex flex-col relative">
+                    
+                    <div class="flex justify-between items-center px-4 py-3 border-b border-gray-100 bg-white">
+                        <h3 class="font-bold text-lg text-primary">图片已生成</h3>
+                        <button @click="showModal = false" class="text-gray-500 hover:text-black p-1 bg-gray-100 rounded-full">
+                            <i class="ph-bold ph-x text-lg"></i>
+                        </button>
+                    </div>
+
+                    <div class="flex-1 overflow-auto p-4 bg-gray-100 flex justify-center items-start">
+                         <img :src="generatedImage" class="max-w-full h-auto shadow-lg border border-gray-200 object-contain">
+                    </div>
+
+                    <div class="p-4 bg-white border-t border-gray-100 flex flex-col md:flex-row gap-3 justify-between items-center">
+                        <p class="text-sm text-gray-500 text-center md:text-left">
+                            <i class="ph-fill ph-info text-blue-500 mr-1"></i>
+                            移动端长按图片可保存，电脑端右键另存为
+                        </p>
+                        <a :href="generatedImage" download="Collage_Export.png" class="px-6 py-2 bg-primary hover:bg-black text-white rounded-lg font-bold text-sm transition-colors shadow-lg">
+                            下载图片 (Download)
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, onUnmounted, nextTick } = Vue;
+
+        createApp({
+            setup() {
+                // 状态
+                const isGenerating = ref(false);
+                const previewScale = ref(0.4);
+                const palette = ['#1D1D1F', '#CD3F3E', '#2A5C8C', '#4F6F52', '#8B5F28'];
+
+                const config = ref({
+                    title: '字体排版测试',
+                    subtitle: '黑白 / 对比',
+                    themeColor: '#1D1D1F',
+                    bgColor: '#FFFFFF',
+                    layout: 'horizontal',
+                    gap: 40,
+                    grayscale: 100,
+                    contrast: 110,
+                });
+
+                const images = ref([]);
+                const generatedImage = ref(null);
+                const showModal = ref(false);
+
+                // 日期
+                const now = new Date();
+                const dateDisplay = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,'0')}.${String(now.getDate()).padStart(2,'0')}`;
+
+                // 方法
+                const handleImageUpload = (event) => {
+                    const files = Array.from(event.target.files);
+                    if (!files.length) return;
+                    files.forEach(file => {
+                        images.value.push({ file, url: URL.createObjectURL(file) });
+                    });
+                    event.target.value = '';
+                };
+
+                const removeImage = (index) => {
+                    URL.revokeObjectURL(images.value[index].url);
+                    images.value.splice(index, 1);
+                };
+
+                const getLabel = (index) => String.fromCharCode(65 + index);
+
+                const layoutClasses = computed(() => {
+                    const l = config.value.layout;
+                    if (l === 'horizontal') return 'flex flex-row items-stretch';
+                    if (l === 'vertical') return 'flex flex-col';
+                    if (l === 'grid') return 'grid';
+                    return '';
+                });
+
+                const layoutStyles = computed(() => {
+                    const count = images.value.length || 1;
+                    const gap = `${config.value.gap}px`;
+                    
+                    if (config.value.layout === 'grid') {
+                        let cols = 2;
+                        if (count === 1) cols = 1;
+                        if (count >= 3 && count <= 6 && count !== 4) cols = 3; 
+                        if (count > 6) cols = 3;
+                        return { gap, gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` };
+                    }
+                    return { gap };
+                });
+                
+                // 动态计算 Canvas 样式
+                const canvasStyle = computed(() => {
+                    // 如果正在生成，则强制移除缩放和阴影，恢复原始尺寸
+                    if (isGenerating.value) {
+                        return {
+                            transform: 'none',
+                            backgroundColor: config.value.bgColor,
+                            boxShadow: 'none',
+                            margin: '0',
+                            // 确保它在截图时位于可视区域左上角，或者被捕获
+                            position: 'relative', 
+                            zIndex: 10
+                        };
+                    }
+                    // 正常预览模式
+                    return {
+                        transform: `scale(${previewScale.value})`,
+                        backgroundColor: config.value.bgColor
+                    };
+                });
+
+                const adjustZoom = (delta) => {
+                    const newScale = previewScale.value + delta;
+                    if (newScale > 0.1 && newScale < 1.5) {
+                        previewScale.value = Number(newScale.toFixed(2));
+                    }
+                };
+
+                const autoFit = () => {
+                    const wrapper = document.getElementById('preview-wrapper');
+                    if (!wrapper) return;
+                    
+                    const padding = 60;
+                    const availableH = wrapper.clientHeight - padding;
+                    const availableW = wrapper.clientWidth - padding;
+                    
+                    const canvasW = 1200;
+                    const canvasH = 1600; 
+                    
+                    const scaleW = availableW / canvasW;
+                    const scaleH = availableH / canvasH;
+                    
+                    previewScale.value = Math.min(Math.min(scaleW, scaleH), 0.6);
+                };
+
+                // “原地复原”生成法
+                const generateAndPreview = async () => {
+                    // 1. 开启生成模式：触发 Vue 响应式，界面瞬间变大（移除 scale）
+                    isGenerating.value = true;
+                    
+                    // 等待 DOM 更新完成，元素变大
+                    await nextTick();
+                    
+                    // 强制等待一下，确保浏览器重绘完成
+                    await new Promise(r => setTimeout(r, 100));
+
+                    const node = document.getElementById('collage-canvas');
+                    
+                    try {
+                        const dataUrl = await htmlToImage.toPng(node, {
+                            quality: 1.0,
+                            pixelRatio: 2, // 2倍高清
+                            backgroundColor: config.value.bgColor,
+                            cacheBust: true, // 防止缓存导致图片加载不出来
+                            // 强制指定宽度和高度，防止截取到多余的空白
+                            width: 1200,
+                            height: node.scrollHeight
+                        });
+
+                        generatedImage.value = dataUrl;
+                        showModal.value = true;
+
+                    } catch (e) {
+                        console.error('生成失败:', e);
+                        alert('生成失败，请重试');
+                    } finally {
+                        // 2. 结束生成模式：界面瞬间恢复缩放
+                        isGenerating.value = false;
+                    }
+                };
+
+                onMounted(() => {
+                    window.addEventListener('resize', autoFit);
+                    setTimeout(autoFit, 100);
+                });
+                
+                onUnmounted(() => window.removeEventListener('resize', autoFit));
+
+                return {
+                    config, images, isGenerating, previewScale, palette,
+                    generatedImage, showModal,
+                    handleImageUpload, removeImage, getLabel,
+                    layoutClasses, layoutStyles, canvasStyle,
+                    generateAndPreview, adjustZoom
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
+
+
+unded-lg border border-transparent hover:border-gray-200 transition">
                                     <input type="color" v-model="config.bgColor" class="w-8 h-8 rounded cursor-pointer block">
                                     <span class="text-[10px] text-secondary font-mono">{{ config.bgColor }}</span>
                                 </div>
